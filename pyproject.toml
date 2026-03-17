@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ytget"
 version = "0.1.0"
-description = "YouTube playlist audio/video downloader on top of yt-dlp"
+description = "YouTube playlist downloader using yt-dlp"
 requires-python = ">=3.10"
 dependencies = [
   "yt-dlp",
@@ -10,4 +14,4 @@ dependencies = [
 ]
 
 [project.scripts]
-ytget = "ytget.cli:main"
+ytget = "ytget:main"

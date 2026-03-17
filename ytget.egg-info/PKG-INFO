@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: ytget
+Version: 0.1.0
+Summary: YouTube playlist downloader using yt-dlp
+Requires-Python: >=3.10
+Requires-Dist: yt-dlp
+Requires-Dist: click
+Requires-Dist: rich

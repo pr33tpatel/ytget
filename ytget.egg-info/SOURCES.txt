@@ -1,0 +1,8 @@
+pyproject.toml
+ytget/__init__.py
+ytget.egg-info/PKG-INFO
+ytget.egg-info/SOURCES.txt
+ytget.egg-info/dependency_links.txt
+ytget.egg-info/entry_points.txt
+ytget.egg-info/requires.txt
+ytget.egg-info/top_level.txt

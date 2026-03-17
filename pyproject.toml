@@ -1,0 +1,13 @@
+[project]
+name = "ytget"
+version = "0.1.0"
+description = "YouTube playlist audio/video downloader on top of yt-dlp"
+requires-python = ">=3.10"
+dependencies = [
+  "yt-dlp",
+  "click",
+  "rich",
+]
+
+[project.scripts]
+ytget = "ytget.cli:main"

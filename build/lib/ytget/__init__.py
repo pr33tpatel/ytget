@@ -463,12 +463,12 @@ def playlist_info(ctx, url):
 @click.pass_context
 def check_playlist(ctx, url, output):
     """
-    Diff a playlist against your local manifest.
+    Inspect a playlist against your local manifest.
 
     Reports:
-      - NEW tracks (on YouTube, not yet downloaded)
-      - REMOVED tracks (in your manifest, gone from YouTube — but check local file)
+      - REMOVED tracks (in your manifest, gone from YouTube — check local file)
       - MISSING FILES (downloaded before, file deleted locally)
+      - UNAVAILABLE ON YOUTUBE (blocked / age-gated / deleted entries currently in playlist)
     """
     verbose = ctx.obj.get("verbose", False)
 
@@ -492,35 +492,44 @@ def check_playlist(ctx, url, output):
     playlist_title = info.get("title", playlist_id)
     manifest = load_manifest(playlist_id)
 
-    current_ids = {
-        e["id"]
-        for e in (info.get("entries") or [])
-        if e
-        and e.get("id")
-        and e.get("title") not in ("[Deleted video]", "[Private video]", None)
-    }
-    tracked_ids = set(manifest.get("tracks", {}).keys())
+    entries = [e for e in (info.get("entries") or []) if e]
+    # IDs currently visible on YouTube (including blocked/age-gated)
+    current_ids = {e.get("id") for e in entries if e.get("id")}
+    tracked_keys = set(manifest.get("tracks", {}).keys())
 
-    new_tracks = current_ids - tracked_ids
-    removed_ids = tracked_ids - current_ids
-    present_tracks = current_ids & tracked_ids
+    # --- Removed from playlist (was in manifest, no longer in playlist JSON)
+    removed_keys = tracked_keys - current_ids
 
     removed_with_file = []
     removed_without_file = []
-    for vid_id in removed_ids:
-        track = manifest["tracks"][vid_id]
+    for key in removed_keys:
+        track = manifest["tracks"][key]
         filepath = Path(track.get("filename", ""))
         if filepath.exists():
-            removed_with_file.append((vid_id, track))
+            removed_with_file.append((key, track))
         else:
-            removed_without_file.append((vid_id, track))
+            removed_without_file.append((key, track))
 
+    # --- Missing local files for tracks that ARE still in playlist
     missing_files = []
-    for vid_id in present_tracks:
-        track = manifest["tracks"][vid_id]
+    for key in tracked_keys & current_ids:
+        track = manifest["tracks"][key]
         filepath = Path(track.get("filename", ""))
         if track.get("filename") and not filepath.exists():
-            missing_files.append((vid_id, track))
+            missing_files.append((key, track))
+
+    # --- Entries that yt-dlp marks as unavailable directly in playlist JSON
+    # (titles like [Deleted video], or entries missing a URL/id)
+    unavailable = []
+    for e in entries:
+        title = e.get("title")
+        vid_id = e.get("id")
+        if not vid_id:
+            continue
+        if title in ("[Deleted video]", "[Private video]", None):
+            unavailable.append((vid_id, title or "Unavailable"))
+
+    # --- Report
 
     console.print(
         f"\n[bold]Playlist:[/bold] {playlist_title}  ([dim]{playlist_id}[/dim])"
@@ -529,32 +538,12 @@ def check_playlist(ctx, url, output):
         f"[bold]Last synced:[/bold] {manifest.get('last_updated', 'Never')}\n"
     )
 
-    if new_tracks:
-        console.print(
-            f"[bold green]▲ {len(new_tracks)} new track(s) on YouTube (not yet downloaded):[/green bold]"
-        )
-        for vid_id in new_tracks:
-            entry = next(
-                (
-                    e
-                    for e in (info.get("entries") or [])
-                    if e and e.get("id") == vid_id
-                ),
-                {},
-            )
-            console.print(
-                f"  [green]+[/green] {entry.get('title', vid_id)}  [dim](https://youtu.be/{vid_id})[/dim]"
-            )
-    else:
-        console.print("[green]✓ No new tracks — you're up to date.[/green]")
-
-    console.print()
-
+    # Removed from YouTube (relative to manifest)
     if removed_with_file:
         console.print(
             f"[bold yellow]⚠  {len(removed_with_file)} track(s) removed from YouTube — local copy preserved:[/yellow bold]"
         )
-        for vid_id, track in removed_with_file:
+        for key, track in removed_with_file:
             console.print(f"  [yellow]![/yellow] {track['title']}")
             console.print(f"      [dim]File:       {track['filename']}[/dim]")
             console.print(
@@ -565,26 +554,45 @@ def check_playlist(ctx, url, output):
         console.print(
             f"\n[bold red]✗  {len(removed_without_file)} track(s) removed from YouTube AND local file missing:[/red bold]"
         )
-        for vid_id, track in removed_without_file:
+        for key, track in removed_without_file:
             console.print(
                 f"  [red]✗[/red] {track['title']}  [dim](downloaded {track['downloaded_at'][:10]})[/dim]"
             )
 
     if not removed_with_file and not removed_without_file:
-        console.print("[green]✓ No tracks removed from YouTube.[/green]")
+        console.print("[green]✓ No tracks removed from YouTube (relative to manifest).[/green]")
 
     console.print()
 
+    # Missing local files
     if missing_files:
         console.print(
-            f"[bold red]⚠  {len(missing_files)} track(s) exist on YouTube but local file is missing (re-download?):[/red bold]"
+            f"[bold red]⚠  {len(missing_files)} track(s) exist in manifest but local file is missing:[/red bold]"
         )
-        for vid_id, track in missing_files:
+        for key, track in missing_files:
             console.print(
-                f"  [red]-[/red] {track['title']}  [dim](https://youtu.be/{vid_id})[/dim]"
+                f"  [red]-[/red] {track['title']}  [dim]({track.get('filename','?')})[/dim]"
+            )
+    else:
+        console.print("[green]✓ No missing local files recorded in manifest.[/green]")
+
+    console.print()
+
+    # Unavailable entries in the playlist JSON itself
+    if unavailable:
+        console.print(
+            f"[bold yellow]⚠  {len(unavailable)} entry/entries in playlist are currently unavailable on YouTube:[/yellow bold]"
+        )
+        for vid_id, title in unavailable:
+            console.print(
+                f"  [yellow]![/yellow] {title}  [dim](https://youtu.be/{vid_id})[/dim]"
             )
 
     console.print(f"\n[dim]Manifest: {get_manifest_path(playlist_id)}[/dim]")
+    console.print(
+        "[dim]Note: yt-dlp's download archive controls which items are treated as 'new'. "
+        "Re-run 'ytget audio' on this playlist to fetch only new tracks.[/dim]"
+    )
 
 
 # -- Command: archive

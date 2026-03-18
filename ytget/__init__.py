@@ -10,6 +10,7 @@ import yt_dlp
 from rich.console import Console
 from rich.table import Table
 from rich import print as rprint
+from rich.panel import Panel
 from rich.progress import (
     Progress,
     BarColumn,
@@ -230,7 +231,7 @@ def repair_manifest_paths(
 
 def make_per_video_progress() -> Progress:
     return Progress(
-        TextColumn("[bold blue]{task.description}"),
+        TextColumn("[bold cyan]{task.description}"),
         BarColumn(),
         DownloadColumn(),
         TransferSpeedColumn(),
@@ -277,6 +278,50 @@ def make_progress_hook(
 
     return hook
 
+# -- Postprocessor hook
+
+def make_postprocessor_hook(per_video: Progress):
+    """
+    Creates a new progress task for each postprocessor step so every
+    step persists as its own line.
+    Deduplicates duplicate hook calls from yt-dlp internals.
+    """
+    active_tasks: Dict[tuple, int] = {}
+    seen: set = set()
+
+    def hook(d):
+        status = d.get("status")
+        info   = d.get("info_dict", {}) or {}
+        vid_id = info.get("id", "unknown")
+        title  = info.get("title", "unknown")
+        pp     = d.get("postprocessor", "Processing")
+
+        key = (vid_id, pp, status)
+        if key in seen:
+            return
+        seen.add(key)
+
+        step_key = (vid_id, pp)
+
+        if status == "started":
+            task_id = per_video.add_task(
+                f"[dim]⚙  {pp}:[/dim] {title}",
+                total=None,  # indeterminate spinner
+            )
+            active_tasks[step_key] = task_id
+
+        elif status == "finished":
+            task_id = active_tasks.pop(step_key, None)
+            if task_id is not None:
+                per_video.update(
+                    task_id,
+                    description=f"[green]✓  {pp}:[/green] {title}",
+                    total=1,
+                    completed=1,
+                )
+
+    return hook
+
 
 # -- Base yt-dlp options
 
@@ -286,6 +331,7 @@ def get_base_opts(
     manifest:    Optional[Dict[str, Any]],
     per_video:   Optional[Progress],
     verbose:     bool,
+    show_processing: bool = False,
 ) -> Dict[str, Any]:
     opts: Dict[str, Any] = {
         "outtmpl":                       os.path.join(output_dir, "%(playlist_title)s/%(title)s.%(ext)s"),
@@ -293,7 +339,7 @@ def get_base_opts(
         "retries":                       5,
         "fragment_retries":              10,
         "concurrent_fragment_downloads": 2,
-        "embedthumbnail":                True,
+        # "embedthumbnail":                True,
         "addmetadata":                   True,
         "ratelimit":                     5 * 1024 * 1024,
         "quiet":                         not verbose,
@@ -303,7 +349,9 @@ def get_base_opts(
     if archive:
         opts["download_archive"] = ARCHIVE_FILE
     if manifest is not None and per_video is not None:
-        opts["progress_hooks"] = [make_progress_hook(manifest, per_video)]
+        opts["progress_hooks"]      = [make_progress_hook(manifest, per_video)]
+        if show_processing:
+            opts["postprocessor_hooks"] = [make_postprocessor_hook(per_video)]
     if not verbose:
         opts["logger"] = QuietLogger()
     return opts
@@ -372,11 +420,13 @@ def list_formats(ctx, target):
 @click.option("--output",         "-o",    default=DEFAULT_OUTPUT_DIR)
 @click.option("--no-archive",              is_flag=True)
 @click.option("--sponsorblock",            is_flag=True)
+@click.option("--show-processing",         is_flag=True, default=False, help="Show FFmpeg postprocessing bars") 
+@click.option("--thumbnail",               is_flag=True, default=False, help="Embed YouTube thumbnail as cover art (extra processing required)")  
 @click.option("--playlist-start",          default=1)
 @click.option("--playlist-end",            default=None, type=int)
 @click.pass_context
 def download_audio(ctx, target, audio_format, quality, output,
-                   no_archive, sponsorblock, playlist_start, playlist_end):
+                   no_archive, sponsorblock, show_processing, thumbnail, playlist_start, playlist_end):
     """Download audio only. Accepts a URL or a registered playlist name."""
     verbose = ctx.obj.get("verbose", False)
     url, playlist_id = resolve_target(target)
@@ -394,14 +444,19 @@ def download_audio(ctx, target, audio_format, quality, output,
         manifest["playlist_title"] = playlist_title
 
     per_video = make_per_video_progress()
-    opts = get_base_opts(output, not no_archive, manifest, per_video, verbose)
+    opts = get_base_opts(output, not no_archive, manifest, per_video, verbose, show_processing)
+    
+    postprocessors = [
+        {"key": "FFmpegExtractAudio", "preferredcodec": audio_format, "preferredquality": quality},
+        {"key": "FFmpegMetadata"},
+    ]
+    if thumbnail:
+        postprocessors.append({"key": "EmbedThumbnail"})
+        opts["embedthumbnail"] = True
+
     opts.update({
-        "format": "bestaudio/best",
-        "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": audio_format, "preferredquality": quality},
-            {"key": "FFmpegMetadata"},
-            {"key": "EmbedThumbnail"},
-        ],
+        "format":         "bestaudio/best",
+        "postprocessors": postprocessors,
         "playlist_items": f"{playlist_start}:{playlist_end}" if playlist_end else f"{playlist_start}:",
     })
 
@@ -411,7 +466,8 @@ def download_audio(ctx, target, audio_format, quality, output,
             {"key": "ModifyChapters", "remove_sponsor_segments": ["sponsor", "intro", "outro", "selfpromo"]},
         ]
 
-    console.rule(f"[bold green]Downloading Audio → {audio_format.upper()}")
+    # console.print(Panel(f"\n[bold green]Retrieving Video[/bold green] [cyan]{resolution}p[/cyan] · [dim]{playlist_title}[/dim]\n", expand=False))
+    console.print(Panel(f"[bold green]Retrieving Audio[/bold green] · [cyan]{audio_format.upper()}[/cyan] · [dim]{playlist_title}[/dim]", expand=False))
     # with per_video:
     #     with yt_dlp.YoutubeDL(opts) as ydl:
     #         ydl.download([url])
@@ -437,11 +493,13 @@ def download_audio(ctx, target, audio_format, quality, output,
 @click.option("--output",   "-o", default=DEFAULT_OUTPUT_DIR)
 @click.option("--no-archive",    is_flag=True)
 @click.option("--subs",          is_flag=True)
+@click.option("--show-processing",         is_flag=True, default=False, help="Show FFmpeg postprocessing bars") 
+@click.option("--thumbnail",               is_flag=True, default=False, help="Embed YouTube thumbnail as cover art (extra processing required)")  
 @click.option("--playlist-start", default=1)
 @click.option("--playlist-end",   default=None, type=int)
 @click.pass_context
 def download_video(ctx, target, resolution, format_ext, output,
-                   no_archive, subs, playlist_start, playlist_end):
+                   no_archive, subs, thumbnail, playlist_start, playlist_end):
     """Download video + audio. Accepts a URL or a registered playlist name."""
     verbose = ctx.obj.get("verbose", False)
     url, playlist_id = resolve_target(target)
@@ -458,18 +516,31 @@ def download_video(ctx, target, resolution, format_ext, output,
           else f"bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]"
 
     per_video = make_per_video_progress()
-    opts = get_base_opts(output, not no_archive, manifest, per_video, verbose)
+    opts = get_base_opts(output, not no_archive, manifest, per_video, verbose, show_processing)
     opts.update({
         "format":              fmt,
         "merge_output_format": format_ext,
         "postprocessors":      [{"key": "FFmpegMetadata"}, {"key": "EmbedThumbnail"}],
         "playlist_items":      f"{playlist_start}:{playlist_end}" if playlist_end else f"{playlist_start}:",
     })
+
+    postprocessors = [{"key": "FFmpegMetadata"}]
+    if thumbnail:
+        postprocessors.append({"key": "EmbedThumbnail"})
+        opts["embedthumbnail"] = True
+
+    opts.update({
+        "format":              fmt,
+        "merge_output_format": format_ext,
+        "postprocessors":      postprocessors,
+        "playlist_items":      f"{playlist_start}:{playlist_end}" if playlist_end else f"{playlist_start}:",
+    })
     if subs:
         opts.update({"writesubtitles": True, "subtitleslangs": ["en"], "embedsubtitles": True})
         opts["postprocessors"].append({"key": "FFmpegEmbedSubtitle"})
 
-    console.rule(f"[bold cyan]Downloading Video → {resolution}p {format_ext.upper()}")
+    console.print(Panel(f"\n[bold green]Retrieving Video[/bold green] · [cyan]{resolution}p[/cyan] · [dim]{playlist_title}[/dim]", expand=False))
+    # console.print(Panel(f"\n[bold green]⬇ Audio[/bold green]  [cyan]{audio_format.upper()}[/cyan] · [dim]{playlist_title}[/dim]\n", expand=False))
     # with per_video:
     #     with yt_dlp.YoutubeDL(opts) as ydl:
     #         ydl.download([url])
@@ -537,6 +608,13 @@ def check_playlist(ctx, target, output):
     """
     verbose = ctx.obj.get("verbose", False)
     url, playlist_id = resolve_target(target)
+
+    # auto repair the manifest
+    manifest_path = get_manifest_path(playlist_id)
+    if manifest_path.exists():
+        fixed, _ = repair_manifest_paths(playlist_id)
+        if fixed:
+            console.print(f"[dim]Auto-repaired {fixed} stale manifest path(s) before `check`.[/dim]")
 
     console.rule("[bold yellow]Fetching current playlist from YouTube...")
 

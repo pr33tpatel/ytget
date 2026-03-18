@@ -59,6 +59,60 @@ def save_manifest(manifest: Dict[str, Any]) -> None:
     p.write_text(json.dumps(manifest, indent=2))
 
 
+# -- Manifest repair helper
+
+def repair_manifest_paths(playlist_id: str, playlist_title: Optional[str] = None) -> tuple[int, int]:
+    """
+    Repair manifest filenames by mapping transient .webm paths to final audio files.
+
+    Returns (fixed_count, still_missing_count).
+    """
+    manifest_path = get_manifest_path(playlist_id)
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Manifest not found: {manifest_path}")
+
+    manifest = json.loads(manifest_path.read_text())
+    tracks = manifest.get("tracks", {})
+
+    fixed = 0
+    not_found = 0
+
+    for key, track in tracks.items():
+        fname = track.get("filename", "")
+        if not fname:
+            continue
+
+        p = Path(fname)
+        # Only repair if the path points to a .webm file
+        if p.suffix.lower() != ".webm":
+            continue
+
+        # Look for likely audio targets with the same stem
+        candidates = []
+        for ext in (".mp3", ".flac", ".opus", ".m4a", ".wav"):
+            cand = p.with_suffix(ext)
+            if cand.exists():
+                candidates.append(cand)
+
+        if candidates:
+            # Prefer mp3, then others in this order
+            priority = [".mp3", ".flac", ".opus", ".m4a", ".wav"]
+            preferred = sorted(
+                candidates,
+                key=lambda c: priority.index(c.suffix.lower()),
+            )[0]
+            track["filename"] = str(preferred)
+            fixed += 1
+        else:
+            not_found += 1
+
+    if playlist_title:
+        manifest["playlist_title"] = playlist_title
+    manifest["last_updated"] = datetime.now().isoformat()
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    return fixed, not_found
+
 # -- Quiet Logging
 
 class QuietLogger:
@@ -617,6 +671,41 @@ def manage_archive(clear, show):
         else:
             console.print("[yellow]No archive file found yet.[/yellow]")
 
+# -- Command: repair
+
+@cli.command("repair")
+@click.argument("url")
+def repair_manifest_cmd(url):
+    """
+    Repair manifest filenames for a playlist.
+
+    This maps old .webm paths to existing audio files (.mp3, .flac, .opus, .m4a, .wav)
+    when possible, and updates the manifest accordingly.
+    """
+    console.rule("[bold yellow]Repairing manifest for playlist...")
+
+    # Reuse yt-dlp to resolve playlist_id and title
+    with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "ignoreerrors": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if not info:
+        console.print("[red]Could not fetch playlist info from URL.[/red]")
+        return
+
+    playlist_id = info.get("id")
+    playlist_title = info.get("title", playlist_id)
+
+    try:
+        fixed, not_found = repair_manifest_paths(playlist_id, playlist_title)
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        return
+
+    manifest_path = get_manifest_path(playlist_id)
+    console.print(f"\n[bold]Playlist:[/bold] {playlist_title}  ([dim]{playlist_id}[/dim])")
+    console.print(f"[bold]Manifest:[/bold] {manifest_path}")
+    console.print(f"[green]✓ Updated entries:[/green] {fixed}")
+    console.print(f"[yellow]• Still pointing to non-existent .webm:[/yellow] {not_found}")
 
 # -- Entry point
 

@@ -4,7 +4,6 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
-import shutil
 
 import click
 import yt_dlp
@@ -31,6 +30,7 @@ MANIFEST_DIR = CONFIG_DIR / "manifests"
 MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
 
 ARCHIVE_FILE = str(CONFIG_DIR / "archive.txt")
+ARCHIVE_META_FILE = CONFIG_DIR / "archive_meta.json"
 PLAYLISTS_FILE = CONFIG_DIR / "playlists.json"
 DEFAULT_OUTPUT_DIR = "/home/preet/YTMedia"
 
@@ -150,7 +150,7 @@ def list_playlists() -> None:
         return
 
     table = Table(title="Registered Playlists")
-    table.add_column("Name", style="bold white")
+    table.add_column("Name", style="white")
     table.add_column("Playlist ID", style="cyan")
     table.add_column("URL", style="dim")
 
@@ -234,6 +234,33 @@ def repair_manifest_paths(
     return fixed, not_found
 
 
+# -- archive meta data functions
+def load_archive_meta() -> Dict[str, Any]:
+    if ARCHIVE_META_FILE.exists():
+        return json.loads(ARCHIVE_META_FILE.read_text())
+    return {}
+
+
+def save_archive_meta(meta: Dict[str, Any]) -> None:
+    ARCHIVE_META_FILE.write_text(json.dumps(meta, indent=2))
+
+
+def register_archive_entry(
+    title: str,
+    vid_id: str,
+    playlist_id: str,
+    playlist_name: str,
+) -> None:
+    meta = load_archive_meta
+    meta[vid_id] = {
+        "title": title,
+        "playlist_id": playlist_id,
+        "playlist_name": playlist_name,
+        "downloaded_at": datetime.now().isoformat(),
+    }
+    save_archive_meta(meta)
+
+
 # -- Progress helpers
 def make_per_video_progress() -> Progress:
     return Progress(
@@ -270,13 +297,20 @@ def make_progress_hook(
 
         elif status == "finished":
             if manifest is not None and vid_id:
+                title = info.get("title", "Unknown")
                 manifest["tracks"][vid_id] = {
-                    "title": info.get("title", "Unknown"),
+                    "title": title,
                     "filename": d.get("filename", ""),
                     "uploader": info.get("uploader", ""),
                     "downloaded_at": datetime.now().isoformat(),
                 }
                 save_manifest(manifest)
+                register_archive_entry(
+                    vid_id,
+                    title,
+                    manifest.get("playlist_id", ""),
+                    manifest.get("playlist_title", ""),
+                )
             if vid_id in task_id_map:
                 task_id = task_id_map[vid_id]
                 per_video.update(task_id, completed=per_video.tasks[task_id].total)
@@ -334,9 +368,13 @@ def make_postprocessor_hook(per_video: Progress):
 # YDL_BASE: Dict[str, Any] = {}
 # if _NODE_PATH:
 #     YDL_BASE["js_runtimes"] = {"node": {"path": _NODE_PATH}}
-YDL_BASE = {
-    "no_js_runtimes": True,
-    "js_runtimes": {"node": {"path": None}},
+# YDL_BASE = {
+#     "no_js_runtimes": True,
+#     "js_runtimes": {"node": {"path": None}},
+# }
+YDL_BASE: Dict[str, Any] = {
+    "logger": QuietLogger(),
+    "config_locations": [str(Path.home() / ".config" / "yt-dlp" / "config")],
 }
 
 
@@ -731,6 +769,107 @@ def playlist_info(ctx, target):
         console.print(f"[bold]Views:[/bold]    {info.get('view_count'):,}\n")
 
 
+# -- Command: remove
+
+
+@cli.command("remove")
+@click.argument("target")
+@click.argument("search")
+@click.option(
+    "--delete-file",
+    is_flag=True,
+    default=False,
+    help="Also delete the local file from drive",
+)
+@click.pass_context
+def remove_track(ctx, target, search, delete_file):
+    """
+    Remove a track from the manifest, archive, and optionally disk.
+
+    TARGET is the playlist name or URL.
+    SEARCH is a partial title or exact video ID to match against.
+
+    Example:
+      ytget remove stuff_to_download "Cali Girl"
+      ytget remove stuff_to_download 5QjIQnjRHPk
+    """
+    url, playlist_id = resolve_target(target)
+    manifest = load_manifest(playlist_id)
+    archive_meta = load_archive_meta()
+    tracks = manifest.get("tracks", {})
+
+    # Match by ID first, then by case-insensitive title substring
+    matches = []
+    for vid_id, track in tracks.items():
+        if search.lower() == vid_id.lower():
+            matches = [(vid_id, track)]
+            break
+        if search.lower() in track.get("title", "").lower():
+            matches.append((vid_id, track))
+
+    if not matches:
+        console.print(f"[red]No tracks found matching:[/red] {search}")
+        return
+
+    if len(matches) > 1:
+        console.print(
+            f"[yellow]Multiple matches for '{search}'. Narrow your search:[/yellow]\n"
+        )
+        for vid_id, track in matches:
+            console.print(f"  [cyan]{vid_id}[/cyan]  {track.get('title', '?')}")
+        return
+
+    vid_id, track = matches[0]
+    title = track.get("title", "?")
+    filename = track.get("filename", "")
+
+    console.print(f"\n[bold]Track:[/bold]  {title}")
+    console.print(f"[bold]ID:[/bold]     {vid_id}")
+    if filename:
+        console.print(f"[bold]File:[/bold]   {filename}")
+    console.print()
+
+    if not click.confirm("Remove this track from archive and manifest?"):
+        console.print("[dim]Aborted.[/dim]")
+        return
+
+    # 1. Remove from manifest
+    del manifest["tracks"][vid_id]
+    save_manifest(manifest)
+    console.print("[green]✓ Removed from manifest.[/green]")
+
+    # 2. Remove from archive.txt
+    archive_path = Path(ARCHIVE_FILE)
+    if archive_path.exists():
+        lines = archive_path.read_text().splitlines()
+        filtered = [l for l in lines if vid_id not in l]
+        archive_path.write_text("\n".join(filtered) + "\n")
+        removed = len(lines) - len(filtered)
+        if removed:
+            console.print("[green]✓ Removed from archive.txt.[/green]")
+        else:
+            console.print("[dim]• Not found in archive.txt (already clean).[/dim]")
+
+    # 3. Remove from archive_meta.json
+    if vid_id in archive_meta:
+        del archive_meta[vid_id]
+        save_archive_meta(archive_meta)
+        console.print("[green]✓ Removed from archive metadata.[/green]")
+
+    # 4. Optionally delete local file
+    if delete_file and filename:
+        filepath = Path(filename)
+        if filepath.exists():
+            filepath.unlink()
+            console.print(f"[green]✓ Deleted file:[/green] {filename}")
+        else:
+            console.print(f"[yellow]• File not found on disk:[/yellow] {filename}")
+    elif filename and not delete_file:
+        console.print(
+            "[dim]• Local file kept. Use --delete-file to also remove it from disk.[/dim]"
+        )
+
+
 # -- Command: check
 
 
@@ -982,8 +1121,18 @@ def manage_archive(clear, show):
     elif show:
         if archive_path.exists():
             lines = archive_path.read_text().strip().splitlines()
+            meta = load_archive_meta()
             console.print(f"[bold]Archive:[/bold] {ARCHIVE_FILE}")
             console.print(f"[bold]Entries:[/bold] {len(lines)} videos tracked")
+            for line in lines:
+                vid_id = line.split()[-1] if line.strip() else ""
+                entry = meta.get(vid_id, {})
+                title = entry.get("title", "[unknown title]")
+                date = entry.get("downloaded_at", "")[:10]
+                playlist = entry.get("playlist_name", "")
+                console.print(
+                    f"  [cyan]{vid_id}[/cyan]  {title}  [dim]{playlist} · {date}[/dim]"
+                )
         else:
             console.print("[yellow]No archive file found yet.[/yellow]")
 

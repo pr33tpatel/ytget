@@ -192,7 +192,8 @@ def repair_manifest_paths(
     playlist_id: str, playlist_title: Optional[str] = None
 ) -> Tuple[int, int]:
     """
-    Repair manifest filenames by mapping transient .webm paths to final audio files.
+    Repair manifest filenames by mapping missing/transient paths to final audio files.
+    Handles .webm, .m4a, .opus, and any other intermediate container left by yt-dlp.
     Returns (fixed_count, still_missing_count).
     """
     manifest_path = get_manifest_path(playlist_id)
@@ -202,6 +203,7 @@ def repair_manifest_paths(
     manifest = json.loads(manifest_path.read_text())
     tracks = manifest.get("tracks", {})
     priority = [".mp3", ".flac", ".opus", ".m4a", ".wav"]
+    intermediate = {".webm", ".m4a", ".opus", ".ogg", ".mp4"}
 
     fixed = 0
     not_found = 0
@@ -211,7 +213,8 @@ def repair_manifest_paths(
         if not fname:
             continue
         p = Path(fname)
-        if p.suffix.lower() != ".webm":
+
+        if p.exists():
             continue
 
         candidates = [
@@ -224,7 +227,10 @@ def repair_manifest_paths(
             track["filename"] = str(preferred)
             fixed += 1
         else:
-            not_found += 1
+            # Only count as "not found" if it was an intermediate container
+            # (final .mp3 going missing is a real missing file, not a repair case)
+            if p.suffix.lower() in intermediate:
+                not_found += 1
 
     if playlist_title:
         manifest["playlist_title"] = playlist_title
@@ -1070,7 +1076,7 @@ def list_unavailable(ctx, target):
 def repair_manifest_cmd(ctx, target):
     """
     Repair manifest filenames for a playlist.
-    Maps old .webm paths to existing audio files (.mp3, .flac, .opus, .m4a, .wav).
+    Maps missing/transient paths (.webm, .m4a, etc.) to existing audio files.
     """
     console.rule("[bold yellow]Repairing manifest for playlist...")
     url, playlist_id = resolve_target(target)
@@ -1099,7 +1105,37 @@ def repair_manifest_cmd(ctx, target):
     console.print(f"[bold]Manifest:[/bold] {get_manifest_path(playlist_id)}")
     console.print(f"[green]✓ Updated entries:[/green] {fixed}")
     console.print(
-        f"[yellow]• Still pointing to non-existent .webm:[/yellow] {not_found}"
+        f"[yellow]• Still pointing to non-existent intermediate file:[/yellow] {not_found}"
+    )
+
+
+# -- Command: archive-backfill
+@cli.command("archive-backfill")
+@click.pass_context
+def archive_backfill(ctx):
+    """Backfill archive_meta.json from existing manifests."""
+    meta = load_archive_meta()
+    manifests_dir = CONFIG_DIR / "manifests"
+    filled = 0
+
+    for manifest_file in manifests_dir.glob("*.json"):
+        manifest = json.loads(manifest_file.read_text())
+        playlist_name = manifest.get("playlist_title", manifest_file.stem)
+        playlist_id = manifest.get("playlist_id", manifest_file.stem)
+
+        for vid_id, track in manifest.get("tracks", {}).items():
+            if vid_id not in meta:
+                meta[vid_id] = {
+                    "title": track.get("title", "Unknown"),
+                    "playlist_id": playlist_id,
+                    "playlist_name": playlist_name,
+                    "downloaded_at": track.get("downloaded_at", ""),
+                }
+                filled += 1
+
+    save_archive_meta(meta)
+    console.print(
+        f"[green]✓ Backfilled {filled} entries into archive_meta.json[/green]"
     )
 
 
@@ -1120,18 +1156,43 @@ def manage_archive(clear, show):
             console.print("[yellow]No archive found.[/yellow]")
     elif show:
         if archive_path.exists():
+            table = Table(title="Archives")
+            table.add_column("Video ID", style="cyan")
+            table.add_column("Name", style="white")
+            table.add_column("Playlist", style="white")
+            table.add_column("Retrieved", style="dim")
+
             lines = archive_path.read_text().strip().splitlines()
             meta = load_archive_meta()
-            console.print(f"[bold]Archive:[/bold] {ARCHIVE_FILE}")
-            console.print(f"[bold]Entries:[/bold] {len(lines)} videos tracked")
+            unknown = 0
+
             for line in lines:
                 vid_id = line.split()[-1] if line.strip() else ""
                 entry = meta.get(vid_id, {})
-                title = entry.get("title", "[unknown title]")
-                date = entry.get("downloaded_at", "")[:10]
+                title = entry.get("title", "")
+                raw_date = entry.get("downloaded_at", "")
+                try:
+                    date = datetime.fromisoformat(raw_date).strftime(
+                        # "%m %d, %Y %I:%M %p"
+                        "%I:%M %p, %m/%d/%Y "
+                    )
+                except (ValueError, TypeError):
+                    date = "-"
                 playlist = entry.get("playlist_name", "")
+
+                if not title:
+                    title = "[dim](no metadata)[/dim]"
+                    unknown += 1
+
+                table.add_row(vid_id, title, playlist, date)
+
+            console.print(table)
+            console.print(f"[bold]Archive:[/bold] {ARCHIVE_FILE}")
+            console.print(f"[bold]Entries:[/bold] {len(lines)} videos tracked\n")
+
+            if unknown:
                 console.print(
-                    f"  [cyan]{vid_id}[/cyan]  {title}  [dim]{playlist} · {date}[/dim]"
+                    f"\n[yellow]• {unknown} entries missing metadata. Run:[/yellow] ytget archive-backfill"
                 )
         else:
             console.print("[yellow]No archive file found yet.[/yellow]")

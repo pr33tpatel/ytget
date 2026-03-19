@@ -6,19 +6,37 @@ A personal YouTube downloader built on [yt-dlp](https://github.com/yt-dlp/yt-dlp
 
 I built ytget because I believe everyone should have the right to own their media locally.
 
-YouTube content disappears constantly — videos get hit with copyright claims, accounts get
+YouTube content disappears constantly, videos get hit with copyright claims, accounts get
 terminated, or creators simply delete their work. Once it's gone, it's gone. If you've built
 a playlist of music, live performances, freestyles, or anything else that matters to you,
 you shouldn't have to hope YouTube keeps it available forever.
 
-ytget is my answer to that. It's not just a downloader — it tracks what you've saved, tells
+ytget is my answer to that. It's not just a downloader, it tracks what you've saved, tells
 you when something gets removed from YouTube, and makes sure you always have a local copy of
 the things you care about. Your media library should belong to you, not a platform.
+
+## Disclaimer
+
+ytget is provided as-is, without warranty of any kind, express or implied. By using this
+software, you agree that the author is not responsible for any damages, legal consequences,
+data loss, or harm to your hardware or software that may result from its use.
+
+**This tool is intended for personal, private use only.** It is your responsibility to ensure
+that any content you download complies with YouTube's Terms of Service, applicable copyright
+law, and the laws of your jurisdiction. Downloading copyrighted content without the rights
+holder's permission may be illegal in your country.
+
+The author does not condone piracy, copyright infringement, or any illegal use of this
+software. ytget was built with the belief that people should be able to preserve personal
+media libraries, content they have a legitimate personal interest in, against the reality
+that online platforms are not permanent archives.
+
+Use this software responsibly and at your own risk.
 
 ## Features
 
 - Download audio (mp3, flac, opus, m4a, wav) or video (mp4, mkv, webm)
-- Playlist registry — use a playlist name instead of URL after first use
+- Playlist registry (use a playlist name instead of URL after first use)
 - Archive-based incremental downloads (only fetches new tracks)
 - Local manifest tracking with auto-repair
 - Rich progress bars with per-track download and postprocessing status
@@ -44,10 +62,10 @@ pipx install .
 ## Usage
 
 ```bash
-# First time — must use full URL to register the playlist
+# Note: for first time: use full URL to register the playlist
 ytget audio "https://www.youtube.com/playlist?list=PLxxx"
 
-# All subsequent runs — use the playlist name
+# All subsequent runs:  use the playlist name
 ytget audio my_playlist
 ytget video my_playlist -r 1080 -e mp4
 
@@ -106,28 +124,10 @@ ytget stores its data in `~/.config/ytget/`:
 
 yt-dlp settings (e.g. JS runtime) are read from `~/.config/yt-dlp/config`.
 
-## Disclaimer
-
-ytget is provided as-is, without warranty of any kind, express or implied. By using this
-software, you agree that the author is not responsible for any damages, legal consequences,
-data loss, or harm to your hardware or software that may result from its use.
-
-**This tool is intended for personal, private use only.** It is your responsibility to ensure
-that any content you download complies with YouTube's Terms of Service, applicable copyright
-law, and the laws of your jurisdiction. Downloading copyrighted content without the rights
-holder's permission may be illegal in your country.
-
-The author does not condone piracy, copyright infringement, or any illegal use of this
-software. ytget was built with the belief that people should be able to preserve personal
-media libraries, content they have a legitimate personal interest in, against the reality
-that online platforms are not permanent archives.
-
-Use this software responsibly and at your own risk.
-
 ## Credits
 
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — the powerful downloader engine that makes
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - the powerful downloader engine that makes
   this possible
-- [FFmpeg](https://ffmpeg.org/) — audio/video processing and conversion
-- [Rich](https://github.com/Textualize/rich) — beautiful terminal UI and progress bars
-- [Click](https://click.palletsprojects.com/) — CLI framework
+- [FFmpeg](https://ffmpeg.org/) - audio/video processing and conversion
+- [Rich](https://github.com/Textualize/rich) - beautiful terminal UI and progress bars
+- [Click](https://click.palletsprojects.com/) - CLI framework

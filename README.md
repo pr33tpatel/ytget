@@ -4,7 +4,7 @@ A personal YouTube downloader built on [yt-dlp](https://github.com/yt-dlp/yt-dlp
 
 ## Motivation
 
-I built ytget because I believe everyone should have the right to own their media locally.
+I built ytget because I believe everyone should have the right to consume their media locally.
 
 YouTube content disappears constantly, videos get hit with copyright claims, accounts get
 terminated, or creators simply delete their work. Once it's gone, it's gone. If you've built
@@ -74,19 +74,6 @@ ytget audio "https://www.youtube.com/watch?v=xxxxx"
 ytget video "https://www.youtube.com/watch?v=xxxxx" -r 720
 ```
 
-## Commands
-
-| Command | Description |
-|---|---|
-| `audio <target>` | Download audio only |
-| `video <target>` | Download video + audio |
-| `check <target>` | Inspect playlist against local manifest |
-| `yt-unavailable <target>` | List deleted/private entries in playlist |
-| `info <target>` | Show playlist/video metadata |
-| `formats <target>` | List available formats |
-| `repair <target>` | Repair stale manifest paths |
-| `playlists` | List all registered playlists |
-| `archive --show / --clear` | Manage download archive |
 
 ## Audio options
 
@@ -119,6 +106,7 @@ ytget stores its data in `~/.config/ytget/`:
 | File | Purpose |
 |---|---|
 | `archive.txt` | yt-dlp download archive (prevents re-downloading) |
+| `archive_meta.json` | Detailed information about archive|
 | `playlists.json` | Playlist name → ID registry |
 | `manifests/<id>.json` | Per-playlist track manifest |
 

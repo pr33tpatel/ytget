@@ -18,6 +18,7 @@
     - [ ] Auto-repair during `audio`: if a manifest entry is `.m4a` before downloading, fix it inline rather than requiring a separate `repair` run
     - [ ] Retry logic with exponential backoff for rate-limited downloads
     - [ ] Lockfile (`~/.config/ytget/ytget.lock`) to prevent two simultaneous `ytget audio` runs on the same playlist
+    - [ ] Update CommandRegistry dynamically
 
 - Distribution:
     - [ ] `pyproject.toml` with proper entry point so `pip install .` just works
